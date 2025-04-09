@@ -1,43 +1,43 @@
-package org.example.service;
+package org.example.config;
 
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.example.model.ApiLog;
-import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.stereotype.Service;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
+import org.springframework.kafka.support.serializer.JsonDeserializer;
+import java.util.HashMap;
+import java.util.Map;
 
-@Service
-public class kafkaConsumerService {
-    private final Counter anomaliesDetected;
+@Configuration
+public class KafkaConsumerConfig {
 
-    public kafkaConsumerService(MeterRegistry meterRegistry) {
-        this.anomaliesDetected = Counter.builder("anomalies_detected")
-                .tag("service", "alert-service")
-                .register(meterRegistry);
+    @Value("${kafka.bootstrap-servers:localhost:9092}") // Default value if property is missing
+    private String bootstrapServers;
+
+    @Bean
+    public ConsumerFactory<String, ApiLog> consumerFactory() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, "alert-service-group");
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
+        props.put(ErrorHandlingDeserializer.KEY_DESERIALIZER_CLASS, StringDeserializer.class);
+        props.put(ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS, JsonDeserializer.class);
+        props.put(JsonDeserializer.VALUE_DEFAULT_TYPE, ApiLog.class.getName());
+        props.put(JsonDeserializer.TRUSTED_PACKAGES, "*");
+        return new DefaultKafkaConsumerFactory<>(props);
     }
 
-    @KafkaListener(topics = "api-logs", groupId = "alert-service-group")
-    public void consumeLog(ApiLog log) {
-        System.out.println("Received Log: " + log.getApiEndpoint() + " | Response Time: " + log.getResponseTime() + "ms");
-
-        // Original anomaly detection logic
-        try {
-            ProcessBuilder pb = new ProcessBuilder("python", "detect_anomaly.py",
-                    String.valueOf(log.getResponseTime()));
-            Process process = pb.start();
-
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            String result = reader.readLine();
-
-            if ("anomaly".equals(result)) {
-                System.out.println("⚠ ALERT: Anomalous API Behavior Detected!");
-                // Added metric tracking
-                anomaliesDetected.increment();
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, ApiLog> kafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, ApiLog> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(consumerFactory());
+        return factory;
+    }
 }
